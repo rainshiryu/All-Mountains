@@ -37,19 +37,19 @@ def on_login_clicked(b):
         password = password_input.value.strip()
         
         if not username or not password:
-            print("❌ Please enter both a username and password.")
+            print("Please enter both a username and password.")
             return
         
         # Simple registration/login simulation
         if username not in user_database:
             user_database[username] = {"password": password, "profile": None}
-            print(f"🔑 New user '{username}' registered! Please fill out your profile below.")
+            print(f"New user '{username}' registered! Please fill out your profile below.")
         else:
             if user_database[username]["password"] != password:
                 print("❌ Incorrect password for this username. Please try again.")
                 return
             else:
-                print(f"🔓 Logged in successfully as '{username}'!")
+                print(f"Logged in successfully as '{username}'!")
                 profile = user_database[username]["profile"]
                 if profile:
                     name_input.value = profile["name"]
@@ -69,7 +69,7 @@ def on_save_clicked(b):
         ability = ability_input.value
         
         if not name:
-            print("❌ Please enter your name.")
+            print("Please enter your name.")
             display(info_container)
             return
             
@@ -78,7 +78,7 @@ def on_save_clicked(b):
             "age": age,
             "ability": ability
         }
-        print("🎉 Profile saved successfully!")
+        print("Profile saved successfully!")
         print(f"Summary for {username}:")
         print(f"- Name: {name}")
         print(f"- Age: {age}")
