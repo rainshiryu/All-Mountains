@@ -1,9 +1,9 @@
-
 # Mountain_Information.py
 # Provide users with important mountain information, including name, weather, hours of operation,
 # location relevance to where you are, trail maps, difficulty levels, number of trails,
 # lift ticket prices, rental prices, and available lessons.
 import os
+import re
 from urllib.parse import urlsplit
 from flask import Blueprint, request, session, redirect, url_for, render_template_string
 import requests
@@ -361,6 +361,41 @@ PAGE = '''<!doctype html>
       color: var(--text-main);
     }
 
+    /* Filter Row */
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      width: 100%;
+      border-top: 1px solid #e3ebe8;
+      padding: 10px 6px 4px;
+    }
+
+    .filter-row label {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 150px;
+      text-align: left;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      gap: 4px;
+    }
+
+    .search-form .filter-row input,
+    .filter-row select {
+      min-width: 0;
+      border: 1px solid #d5e0dc;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      font-size: 0.95rem;
+      font-weight: 400;
+      color: var(--text-main);
+      background: #ffffff;
+    }
+
     /* Location Relevance Toolbar */
     .location-bar {
       margin-top: 16px;
@@ -673,9 +708,27 @@ PAGE = '''<!doctype html>
           value="{{ query }}"
         >
         <button type="submit" class="btn btn-primary">Search Resorts</button>
-        {% if query %}
+        {% if query or difficulty or min_trails or max_price %}
           <a href="{{ url_for('mountain_search.search') }}" class="btn btn-clear">Clear</a>
         {% endif %}
+
+        <!-- Filters -->
+        <div class="filter-row">
+          <label>Skill Level
+            <select name="difficulty">
+              <option value="">Any level</option>
+              {% for level in levels %}
+                <option value="{{ level }}" {% if difficulty == level %}selected{% endif %}>Good for {{ level }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Min Trails
+            <input type="number" name="min_trails" min="0" step="1" placeholder="e.g. 50" value="{{ min_trails }}">
+          </label>
+          <label>Max Lift Ticket ($)
+            <input type="number" name="max_price" min="0" step="1" placeholder="e.g. 150" value="{{ max_price }}">
+          </label>
+        </div>
       </form>
 
       <!-- Location Relevance Controls -->
@@ -707,6 +760,8 @@ PAGE = '''<!doctype html>
             <label for="sort-select">Sort by:</label>
             <select id="sort-select">
               <option value="name">Name (A–Z)</option>
+              <option value="price">Lift Ticket (Lowest First)</option>
+              <option value="trails">Most Trails</option>
               <option value="distance" disabled id="sort-distance-opt">Distance (Closest First)</option>
             </select>
           </div>
@@ -723,6 +778,8 @@ PAGE = '''<!doctype html>
               data-lat="{{ mountain.lat if mountain.lat is not none else '' }}"
               data-lon="{{ mountain.lon if mountain.lon is not none else '' }}"
               data-distance=""
+              data-price="{{ mountain.price_num if mountain.price_num is not none else '' }}"
+              data-trails="{{ mountain.trails_num if mountain.trails_num is not none else '' }}"
             >
               <div>
                 <div class="card-header">
@@ -797,7 +854,7 @@ PAGE = '''<!doctype html>
       {% else %}
         <div class="empty-state">
           <h3>No ski mountains found</h3>
-          <p>We couldn't find any resorts matching "{{ query }}". Try searching a broader location or clearing your filter.</p>
+          <p>We couldn't find any resorts matching your search. Try searching a broader location or clearing your filter.</p>
         </div>
       {% endif %}
     {% endif %}
@@ -898,6 +955,14 @@ PAGE = '''<!doctype html>
             if (isNaN(db)) return -1;
             return da - db;
           }
+          if (mode === 'price' || mode === 'trails') {
+            const va = parseFloat(mode === 'price' ? a.dataset.price : a.dataset.trails);
+            const vb = parseFloat(mode === 'price' ? b.dataset.price : b.dataset.trails);
+            if (isNaN(va) && isNaN(vb)) return 0;
+            if (isNaN(va)) return 1;
+            if (isNaN(vb)) return -1;
+            return mode === 'price' ? va - vb : vb - va;
+          }
           return a.dataset.name.localeCompare(b.dataset.name);
         });
         cards.forEach((card) => grid.appendChild(card));
@@ -981,6 +1046,27 @@ def safe_url(value):
     return None
 
 
+# Skill level filter: a mountain is "good for" a level if at least this
+# percent of its trails are that level.
+LEVEL_THRESHOLDS = {'Beginner': 20, 'Intermediate': 40, 'Advanced': 40}
+
+
+def first_number(value):
+    """Pull the first number out of things like 'Adult Full Day: $115 | Youth: $92'."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r'\d+(?:\.\d+)?', str(value).replace(',', ''))
+    return float(match.group()) if match else None
+
+
+def level_percent(difficulty, level):
+    """Read e.g. '20% Beginner, 54% Intermediate' and return the percent for one level."""
+    match = re.search(r'(\d+)\s*%\s*' + re.escape(level), str(difficulty), re.I)
+    return int(match.group(1)) if match else None
+
+
 def normalize(item):
     city = str(pick(item, 'city', 'location') or '')
     state = str(pick(item, 'state', 'province') or '')
@@ -1009,6 +1095,8 @@ def normalize(item):
         'rentals': display(pick(item, 'rental_prices', 'rentalPrices', 'equipment_rentals', 'equipmentRentals', 'rentals', 'rental_price')),
         'lessons': display(pick(item, 'available_lessons', 'availableLessons', 'lessons', 'ski_lessons', 'lessonAvailability')),
         'map_url': safe_url(pick(item, 'trail_map_url', 'trailMapUrl', 'trail_map', 'trailMap', 'map_url')),
+        'trails_num': first_number(trails),
+        'price_num': first_number(pick(item, 'lift_ticket_prices', 'liftTicketPrices', 'lift_ticket_price', 'liftTicketPrice', 'ticket_prices', 'ticketPrice', 'prices')),
     }
 
 
@@ -1017,6 +1105,11 @@ def search():
     if not session.get('user_id'):
         return redirect(url_for('login'))
     query = request.args.get('q', '').strip()
+    difficulty = request.args.get('difficulty', '').strip()
+    min_trails = request.args.get('min_trails', '').strip()
+    max_price = request.args.get('max_price', '').strip()
+    if difficulty not in LEVEL_THRESHOLDS:
+        difficulty = ''
     data = []
     
     try:
@@ -1044,5 +1137,19 @@ def search():
                 filtered.append(m)
         mountains = filtered
 
+    if difficulty:
+        mountains = [m for m in mountains
+                     if (level_percent(m['difficulty'], difficulty) or 0) >= LEVEL_THRESHOLDS[difficulty]]
+
+    min_trails_num = first_number(min_trails)
+    if min_trails_num is not None:
+        mountains = [m for m in mountains if m['trails_num'] is not None and m['trails_num'] >= min_trails_num]
+
+    max_price_num = first_number(max_price)
+    if max_price_num is not None:
+        mountains = [m for m in mountains if m['price_num'] is not None and m['price_num'] <= max_price_num]
+
     mountains.sort(key=lambda m: m['name'].casefold())
-    return render_template_string(PAGE, mountains=mountains, query=query, error=None)
+    return render_template_string(PAGE, mountains=mountains, query=query, error=None,
+                                  levels=list(LEVEL_THRESHOLDS), difficulty=difficulty,
+                                  min_trails=min_trails, max_price=max_price)
